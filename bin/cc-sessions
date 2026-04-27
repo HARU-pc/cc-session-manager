@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+# cc-sessions: fzf TUIでセッション一覧→resume
+# 使用法:
+#   cc-sessions          現在のcwdに紐づくセッション一覧
+#   cc-sessions --all    全cwdのセッション
+#   cc-sessions --cwd P  指定パスのセッション
+
+set -u
+
+INDEX="$HOME/.claude/sessions/index.jsonl"
+[ ! -s "$INDEX" ] && { echo "no sessions recorded yet: $INDEX"; exit 1; }
+
+MODE="cwd"
+TARGET_CWD="$PWD"
+case "${1:-}" in
+  --all) MODE="all" ;;
+  --cwd) MODE="cwd"; TARGET_CWD="${2:-$PWD}" ;;
+  -h|--help) echo "usage: cc-sessions [--all|--cwd PATH]"; exit 0 ;;
+esac
+
+# index.jsonl を新しい順に並べ、cwd絞込
+FILTER='.'
+[ "$MODE" = "cwd" ] && FILTER="select(.cwd == \"$TARGET_CWD\")"
+
+ROWS=$(tac "$INDEX" 2>/dev/null || tail -r "$INDEX")
+LINES=$(echo "$ROWS" | jq -r --arg mode "$MODE" --arg cwd "$TARGET_CWD" '
+  select($mode == "all" or .cwd == $cwd)
+  | [.id, (.ended_at // "-"), (.turns|tostring), (.cwd // "-"), ((.title // .summary // "") | gsub("\t"; " ") | .[0:120])]
+  | @tsv
+')
+
+[ -z "$LINES" ] && { echo "no sessions for cwd=$TARGET_CWD (try --all)"; exit 1; }
+
+# preview: 該当レコード全体をjqで整形
+PREVIEW='jq -r --arg id {1} "select(.id==\$id)" '"$INDEX"' | jq .'
+
+SELECTED=$(echo "$LINES" | fzf \
+  --delimiter='\t' \
+  --with-nth=2,3,4,5 \
+  --preview="$PREVIEW" \
+  --preview-window='right:50%:wrap' \
+  --header='enter=resume / ctrl-c=quit / mode='"$MODE" \
+  --ansi)
+
+[ -z "$SELECTED" ] && exit 0
+
+ID=$(echo "$SELECTED" | cut -f1)
+SCWD=$(echo "$SELECTED" | cut -f4)
+
+# cwd 切替してresume
+if [ -n "$SCWD" ] && [ -d "$SCWD" ] && [ "$SCWD" != "$PWD" ]; then
+  echo "cd $SCWD && claude --resume $ID"
+  cd "$SCWD" && exec claude --resume "$ID"
+else
+  exec claude --resume "$ID"
+fi
