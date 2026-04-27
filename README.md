@@ -2,6 +2,27 @@
 
 Claude Code セッション終了時に概略+resume IDを自動保存し、fzf TUIから検索・再開する仕組み。
 
+## Claude Code 標準 `--resume` との比較
+
+`claude --resume` は対話 UI 内蔵の resume picker。本ツールは外部 SQLite + fzf による拡張。
+
+| 項目 | 標準 `claude --resume` | cc-sessions |
+|---|---|---|
+| 起動方法 | `claude --resume` (対話 picker) / `claude --resume <id>` (直接) | `cc-sessions` (fzf TUI) / `claude --resume <id>` (直接) |
+| 一覧データ源 | Claude Code 内部状態 | `~/.claude/sessions/index.db` (SQLite) |
+| cwd 絞込 | プロジェクト単位の自動絞込 | 既定 現 cwd / `--all` 全件 / `--cwd <path>` 指定 |
+| 概略表示 | 直近メッセージ抜粋 | 最初のユーザー発話 先頭 200 字 (SessionEnd 時抽出) |
+| タイトル編集 | 不可 | `Ctrl-E` で編集 |
+| 概略編集 | 不可 | `Ctrl-S` で `$EDITOR` 起動 |
+| 終了理由記録 | なし | `reason` カラム (clear/resume/logout 等) |
+| ターン数・経過時間 | 表示なし | `turns` / `duration_ms` 記録 |
+| 全文検索 | picker 内 fuzzy | fzf fuzzy + SQL 直叩き可 |
+| プロジェクト跨ぎ検索 | 制限あり | `--all` で全 cwd 横断 |
+| 外部依存 | なし | `fzf` / `jq` / `sqlite3` 必要 |
+| データ永続性 | Claude Code 管理 (内部仕様変更で消失リスク) | 独立 DB (本ツール側で寿命管理) |
+
+使い分け: 同一プロジェクト内 直近 resume → 標準で十分。プロジェクト跨ぎ検索・編集メモ・終了理由フィルタ → cc-sessions。
+
 ## 依存
 
 `fzf` / `jq` / `sqlite3` / `bash` / `claude` (Claude Code CLI)
