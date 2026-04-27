@@ -2,3 +2,5 @@
 *.bak.*
 *.tmp
 sessions/index.jsonl
+sessions/index.db
+sessions/index.db-*

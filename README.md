@@ -4,7 +4,7 @@ Claude Code セッション終了時に概略+resume IDを自動保存し、fzf 
 
 ## 依存
 
-`fzf` / `jq` / `bash` / `claude` (Claude Code CLI)
+`fzf` / `jq` / `sqlite3` / `bash` / `claude` (Claude Code CLI)
 
 ## インストール
 
@@ -26,7 +26,7 @@ cd ~/projects/cc-session-manager
 - `<repo>/bin/cc-sessions` — fzf TUI ランチャー
 - `~/.claude/hooks/session-end-save.sh` → repo への symlink
 - `~/.local/bin/cc-sessions` → repo への symlink（or `$CC_BIN_DIR/cc-sessions`）
-- `~/.claude/sessions/index.jsonl` — セッション記録 DB（追記型 JSONL、gitignore 済）
+- `~/.claude/sessions/index.db` — セッション記録 DB（SQLite、gitignore 済）
 - `~/.claude/settings.json` — hook 登録
 
 ## SessionEnd hook 仕様
@@ -76,21 +76,25 @@ cd ~/projects/cc-session-manager
 
 軽量抽出方式: `type=="user"` かつ `isSidechain != true` の最初のメッセージから text を結合し先頭 200 文字を概略とする。LLM 呼出なし。
 
-## index.jsonl レコード構造
+## index.db スキーマ（SQLite）
 
-```json
-{
-  "id": "<session_id>",
-  "cwd": "<作業ディレクトリ>",
-  "ended_at": "<UTC ISO8601>",
-  "reason": "<終了理由>",
-  "title": "<タイトル or 概略>",
-  "summary": "<最初のユーザー発話 先頭200文字>",
-  "turns": <number>,
-  "duration_ms": <number>,
-  "transcript": "<transcript絶対パス>"
-}
+```sql
+CREATE TABLE sessions (
+  id          TEXT PRIMARY KEY,    -- session_id（resume用）
+  cwd         TEXT,                -- 作業ディレクトリ
+  ended_at    TEXT NOT NULL,       -- UTC ISO8601
+  reason      TEXT,                -- 終了理由
+  title       TEXT,                -- タイトル or 概略
+  summary     TEXT,                -- 最初のユーザー発話 先頭200文字
+  turns       INTEGER DEFAULT 0,
+  duration_ms INTEGER DEFAULT 0,
+  transcript  TEXT                 -- transcript絶対パス
+);
+CREATE INDEX idx_sessions_cwd      ON sessions(cwd);
+CREATE INDEX idx_sessions_ended_at ON sessions(ended_at DESC);
 ```
+
+`id` 主キーのため、resume保存時は `INSERT OR REPLACE` で同レコード上書き（重複なし）。
 
 ---
 
@@ -131,13 +135,22 @@ index.jsonl から ID 直接コピーして使う場合。
 ### セッション記録の確認
 
 ```sh
-tail -5 ~/.claude/sessions/index.jsonl | jq .
+sqlite3 ~/.claude/sessions/index.db \
+  "SELECT id, ended_at, turns, title FROM sessions ORDER BY ended_at DESC LIMIT 5;"
+```
+
+JSON で見たい場合:
+```sh
+sqlite3 -json ~/.claude/sessions/index.db \
+  "SELECT * FROM sessions ORDER BY ended_at DESC LIMIT 5" | jq .
 ```
 
 ### 記録のリセット
 
 ```sh
-: > ~/.claude/sessions/index.jsonl
+sqlite3 ~/.claude/sessions/index.db "DELETE FROM sessions;"
+# or 全DB削除
+rm ~/.claude/sessions/index.db
 ```
 
 ## 動作確認
@@ -147,14 +160,14 @@ hook 単体テスト:
 ```sh
 echo '{"session_id":"test","transcript_path":"/tmp/x","cwd":"/tmp","reason":"clear","turn_count":1,"duration_ms":1000}' \
   | bash ~/.claude/hooks/session-end-save.sh
-tail -1 ~/.claude/sessions/index.jsonl | jq .
+sqlite3 -json ~/.claude/sessions/index.db "SELECT * FROM sessions WHERE id='test'" | jq .
 ```
 
 ## トラブルシューティング
 
 | 症状 | 原因・対処 |
 |---|---|
-| index.jsonl に追記されない | hook 未発火。`reason` 確認。Claude Code 再起動後試す |
+| index.db に追記されない | hook 未発火。`reason` 確認。Claude Code 再起動後試す |
 | `cc-sessions: command not found` | `$CC_BIN_DIR`（既定 `~/.local/bin`）が PATH 未追加。`export PATH="$HOME/.local/bin:$PATH"` を rc に追記 |
 | fzf preview 文字化け | `LC_ALL=ja_JP.UTF-8 cc-sessions` |
 | 概略が空 | transcript に user メッセージ無し or `isSidechain=true` のみ |

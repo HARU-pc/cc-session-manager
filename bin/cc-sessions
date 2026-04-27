@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# cc-sessions: fzf TUIでセッション一覧→resume
+# cc-sessions: fzf TUIでセッション一覧→resume (SQLite版)
 # 使用法:
 #   cc-sessions          現在のcwdに紐づくセッション一覧
 #   cc-sessions --all    全cwdのセッション
@@ -7,8 +7,31 @@
 
 set -u
 
-INDEX="$HOME/.claude/sessions/index.jsonl"
-[ ! -s "$INDEX" ] && { echo "no sessions recorded yet: $INDEX"; exit 1; }
+DB="$HOME/.claude/sessions/index.db"
+
+# 内部サブコマンド: fzf preview 用（外部から呼ばれる）
+if [ "${1:-}" = "_preview" ]; then
+  ID="${2:-}"
+  [ -z "$ID" ] && exit 0
+  # IDサニタイズ: UUIDフォーマット ([0-9a-fA-F-] のみ) 以外は弾く（SQLi防御）
+  case "$ID" in
+    *[!0-9a-fA-F-]*) echo "invalid id: $ID"; exit 1 ;;
+  esac
+  sqlite3 -json "$DB" "SELECT * FROM sessions WHERE id = '$ID';" \
+  | jq -r '.[0] |
+      "ID:       \(.id)\n" +
+      "Title:    \(.title // "-")\n" +
+      "Ended:    \(.ended_at // "-")\n" +
+      "Turns:    \(.turns // 0)\n" +
+      "Duration: \((.duration_ms // 0) / 1000 | floor) sec\n" +
+      "Reason:   \(.reason // "-")\n" +
+      "CWD:      \(.cwd // "-")\n" +
+      "\n--- Summary ---\n\(.summary // "(none)")\n" +
+      "\n--- Transcript ---\n\(.transcript // "-")"'
+  exit 0
+fi
+
+[ ! -s "$DB" ] && { echo "no sessions recorded yet: $DB"; exit 1; }
 
 MODE="cwd"
 TARGET_CWD="$PWD"
@@ -18,34 +41,74 @@ case "${1:-}" in
   -h|--help) echo "usage: cc-sessions [--all|--cwd PATH]"; exit 0 ;;
 esac
 
-# index.jsonl を新しい順に並べ、cwd絞込
-FILTER='.'
-[ "$MODE" = "cwd" ] && FILTER="select(.cwd == \"$TARGET_CWD\")"
+# 自身のフルパス（preview用に保存。symlink解決後）
+SELF="$(command -v "$0" 2>/dev/null || echo "$0")"
+case "$SELF" in /*) ;; *) SELF="$PWD/$SELF" ;; esac
 
-ROWS=$(tac "$INDEX" 2>/dev/null || tail -r "$INDEX")
-LINES=$(echo "$ROWS" | jq -r --arg mode "$MODE" --arg cwd "$TARGET_CWD" '
-  select($mode == "all" or .cwd == $cwd)
-  | [.id, (.ended_at // "-"), (.turns|tostring), (.cwd // "-"), ((.title // .summary // "") | gsub("\t"; " ") | .[0:120])]
-  | @tsv
-')
+# WHERE句構築（cwdモード時のみ絞込）
+if [ "$MODE" = "all" ]; then
+  WHERE=""
+  PARAM_CWD=""
+else
+  WHERE="WHERE cwd = :cwd"
+  PARAM_CWD=".parameter set :cwd $(printf '%s' "$TARGET_CWD" | jq -Rs .)"
+fi
 
-[ -z "$LINES" ] && { echo "no sessions for cwd=$TARGET_CWD (try --all)"; exit 1; }
+# SELECT: TSV出力 [id, ended_local, turns, cwd_short, title, cwd_full]
+# - ended_at をローカル時刻に変換 (strftime localtime)
+# - cwd を HOME→~ 短縮
+# - title は title優先、空ならsummary、120文字切詰
+LINES=$(sqlite3 -separator $'\t' "$DB" <<SQL
+$PARAM_CWD
+.parameter set :home $(printf '%s' "$HOME" | jq -Rs .)
 
-# preview: 該当レコード全体をjqで整形
-PREVIEW='jq -r --arg id {1} "select(.id==\$id)" '"$INDEX"' | jq .'
+SELECT
+  id,
+  COALESCE(strftime('%Y-%m-%d %H:%M', ended_at, 'localtime'), '-'),
+  COALESCE(turns, 0),
+  CASE
+    WHEN cwd IS NULL OR cwd = '' THEN '-'
+    WHEN substr(cwd, 1, length(:home)) = :home THEN '~' || substr(cwd, length(:home) + 1)
+    ELSE cwd
+  END,
+  substr(REPLACE(COALESCE(NULLIF(title, ''), summary, ''), char(9), ' '), 1, 120),
+  COALESCE(cwd, '-')
+FROM sessions
+$WHERE
+ORDER BY ended_at DESC;
+SQL
+)
 
-SELECTED=$(echo "$LINES" | fzf \
+if [ -z "$LINES" ]; then
+  if [ "$MODE" = "cwd" ]; then
+    echo "no sessions for cwd=$TARGET_CWD (try --all)"
+  else
+    echo "no sessions found"
+  fi
+  exit 1
+fi
+
+# 列幅整形: TSV 3列構造に変換 [id, display_text, cwd_full]
+DISPLAY=$(echo "$LINES" | awk -F'\t' '{
+  disp = sprintf("%-16s  %4s turns  %-30s  %s", $2, $3, $4, $5)
+  printf "%s\t%s\t%s\n", $1, disp, $6
+}')
+
+# preview: 自身を _preview サブコマンドで再帰呼出（quoting地獄回避）
+PREVIEW="$SELF _preview {1}"
+
+SELECTED=$(echo "$DISPLAY" | fzf \
   --delimiter='\t' \
-  --with-nth=2,3,4,5 \
+  --with-nth=2 \
   --preview="$PREVIEW" \
-  --preview-window='right:50%:wrap' \
-  --header='enter=resume / ctrl-c=quit / mode='"$MODE" \
+  --preview-window='right:55%:wrap' \
+  --header='enter=resume / ctrl-c=quit / mode='"$MODE"' / cols: ended | turns | cwd | title' \
   --ansi)
 
 [ -z "$SELECTED" ] && exit 0
 
 ID=$(echo "$SELECTED" | cut -f1)
-SCWD=$(echo "$SELECTED" | cut -f4)
+SCWD=$(echo "$SELECTED" | cut -f3)
 
 # cwd 切替してresume
 if [ -n "$SCWD" ] && [ -d "$SCWD" ] && [ "$SCWD" != "$PWD" ]; then

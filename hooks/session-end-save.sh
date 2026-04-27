@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# SessionEnd hook: セッション概略+resume IDを ~/.claude/sessions/index.jsonl に追記
-# 軽量抽出方式 — transcriptから最初のユーザー発話を切り出すのみ。LLM呼出なし。
+# SessionEnd hook: セッション概略+resume IDを ~/.claude/sessions/index.db に保存
+# SQLite版。INSERT OR REPLACE でID重複時上書き（resume保存対応）。
 
 set -u
 
-INDEX="$HOME/.claude/sessions/index.jsonl"
-mkdir -p "$(dirname "$INDEX")"
+DB="$HOME/.claude/sessions/index.db"
+mkdir -p "$(dirname "$DB")"
 
 # stdin の JSON を読込
 INPUT=$(cat)
@@ -37,18 +37,39 @@ fi
 # title未設定時は概略を流用
 [ -z "$TITLE" ] && TITLE="$SUMMARY"
 
-# レコード生成して追記
-jq -cn \
-  --arg id "$SESSION_ID" \
-  --arg cwd "$CWD" \
-  --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-  --arg reason "$REASON" \
-  --arg title "$TITLE" \
-  --arg summary "$SUMMARY" \
-  --arg transcript "$TRANSCRIPT" \
-  --argjson turns "$TURNS" \
-  --argjson duration "$DURATION" \
-  '{id:$id, cwd:$cwd, ended_at:$ts, reason:$reason, title:$title, summary:$summary, turns:$turns, duration_ms:$duration, transcript:$transcript}' \
-  >> "$INDEX"
+ENDED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+# スキーマ作成（冪等）+ UPSERT
+# bind variable で SQLi 完全回避
+sqlite3 "$DB" <<SQL
+CREATE TABLE IF NOT EXISTS sessions (
+  id          TEXT PRIMARY KEY,
+  cwd         TEXT,
+  ended_at    TEXT NOT NULL,
+  reason      TEXT,
+  title       TEXT,
+  summary     TEXT,
+  turns       INTEGER DEFAULT 0,
+  duration_ms INTEGER DEFAULT 0,
+  transcript  TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_sessions_cwd      ON sessions(cwd);
+CREATE INDEX IF NOT EXISTS idx_sessions_ended_at ON sessions(ended_at DESC);
+
+.parameter set :id        $(printf '%s' "$SESSION_ID" | jq -Rs .)
+.parameter set :cwd       $(printf '%s' "$CWD"        | jq -Rs .)
+.parameter set :ended_at  $(printf '%s' "$ENDED_AT"   | jq -Rs .)
+.parameter set :reason    $(printf '%s' "$REASON"     | jq -Rs .)
+.parameter set :title     $(printf '%s' "$TITLE"      | jq -Rs .)
+.parameter set :summary   $(printf '%s' "$SUMMARY"    | jq -Rs .)
+.parameter set :turns     $TURNS
+.parameter set :duration  $DURATION
+.parameter set :tx        $(printf '%s' "$TRANSCRIPT" | jq -Rs .)
+
+INSERT OR REPLACE INTO sessions
+  (id, cwd, ended_at, reason, title, summary, turns, duration_ms, transcript)
+VALUES
+  (:id, :cwd, :ended_at, :reason, :title, :summary, :turns, :duration, :tx);
+SQL
 
 exit 0
