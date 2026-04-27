@@ -110,6 +110,19 @@ cc-sessions
 
 fzf 起動。↑↓で選択、Enter で `claude --resume <id>` 実行。preview に JSON 全項目表示。
 
+#### キーバインド
+
+| キー | 動作 |
+|---|---|
+| `Enter` | `claude --resume <id>` 実行 |
+| `Ctrl-E` | 選択行の **title 編集** (1行入力。空入力でキャンセル) |
+| `Ctrl-S` | 選択行の **summary 編集** (`$EDITOR` 起動。複数行可。未設定時 `vi`) |
+| `Ctrl-C` | 終了 |
+
+編集後は一覧と preview が即時 reload。
+
+> **注意**: 同セッションを再 resume → 終了すると hook の `INSERT OR REPLACE` でユーザー編集の title/summary が上書きされる。永続的にメモを残したい場合は別カラム化が必要 (拡張ポイント)。
+
 #### 全セッション
 
 ```sh
