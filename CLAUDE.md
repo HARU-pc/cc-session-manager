@@ -61,3 +61,48 @@ subject 先頭に変更種別プレフィックスを `[xxx]` 形式で付与。
 
 - bash / jq / sqlite3 / fzf / claude 以外の依存追加禁止
 - 追加が不可避な場合は README の「依存」節と `install.sh` の依存チェックに同時反映
+
+## 仕様書
+
+設計仕様は `spec/` 配下を単一ソースとする。`spec/SPEC.md` がエントリポイント。
+
+### ディレクトリ構成
+
+```
+spec/
+├── SPEC.md             全体概観（必ずここから読む）
+├── components/         実装単位の詳細
+│   ├── hook.md         hooks/session-end-save.sh
+│   ├── cli.md          bin/cc-sessions
+│   └── install.md      install.sh
+├── data/
+│   └── schema.md       DBスキーマ + ファイル配置 + マイグレーション履歴
+└── cross-cutting/      横断関心事
+    ├── security.md     脅威モデル + SQL/FS安全規約
+    └── conventions.md  コーディング規約 + 運用ルール
+```
+
+### 更新義務
+
+変更内容に応じて、**同一 PR 内で** 該当仕様書を更新すること。
+
+| 変更内容 | 更新対象 |
+|---|---|
+| 新コンポーネント追加 | `spec/components/<name>.md` 新規 + `spec/SPEC.md` の関連ドキュメント節追記 |
+| 既存コンポーネント挙動変更 | 該当 `spec/components/<name>.md` |
+| DB スキーマ変更 | `spec/data/schema.md` + マイグレーション履歴節 |
+| セキュリティ規約変更 | `spec/cross-cutting/security.md` |
+| コーディング規約・運用ルール変更 | `spec/cross-cutting/conventions.md` |
+| ユーザー向け手順変更 | `README.md`（spec ではない） |
+
+### 役割分担
+
+- `README.md` — ユーザー向け手順（インストール / 使用方法 / トラブル対応）
+- `spec/` — 設計判断・データモデル・拡張ポイント・脅威モデル
+- `CLAUDE.md` — AI 向け運用ルール（本ファイル）
+
+役割を混在させない。README に設計判断を書かない、spec に手順を書かない。
+
+### 軽微な修正
+
+仕様書のみの誤字・表現修正は `[docs]` プレフィックスで OK。

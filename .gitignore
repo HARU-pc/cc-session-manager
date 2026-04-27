@@ -4,3 +4,4 @@
 sessions/index.jsonl
 sessions/index.db
 sessions/index.db-*
+.private/
