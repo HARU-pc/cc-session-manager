@@ -165,8 +165,15 @@ SCWD=$(echo "$SELECTED" | cut -f3)
 
 # cwd 切替してresume
 if [ -n "$SCWD" ] && [ -d "$SCWD" ] && [ "$SCWD" != "$PWD" ]; then
-  echo "cd $SCWD && claude --resume $ID"
-  cd "$SCWD" && exec claude --resume "$ID"
+  cd "$SCWD" || exit 1
+fi
+
+# git repo なら root を --add-dir（gclaude相当の挙動をresumeでも担保）
+ROOT=$(git rev-parse --show-toplevel 2>/dev/null)
+if [ -n "$ROOT" ]; then
+  echo "cd $PWD && claude --add-dir $ROOT --resume $ID"
+  exec claude --add-dir "$ROOT" --resume "$ID"
 else
+  echo "cd $PWD && claude --resume $ID"
   exec claude --resume "$ID"
 fi

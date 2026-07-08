@@ -37,8 +37,10 @@
    ```
 6. **選択結果から resume**:
    - `id` = `cut -f1`、`cwd` = `cut -f3`
-   - cwd が存在ディレクトリかつ現在と異なる → `cd "$SCWD" && exec claude --resume "$ID"`
-   - そうでなければ `exec claude --resume "$ID"`
+   - cwd が存在ディレクトリかつ現在と異なる → 先に `cd "$SCWD"`
+   - `cd` 後の `$PWD` が git repo なら `git rev-parse --show-toplevel` で repo root 取得 → `exec claude --add-dir "$ROOT" --resume "$ID"`
+   - git repo でなければ `exec claude --resume "$ID"`
+   - 既存 `gclaude` alias (`claude --add-dir "$(git rev-parse --show-toplevel)"`) と同等の add-dir 挙動を resume 経路でも担保するための分岐
 
 ## `_list` サブコマンド
 
